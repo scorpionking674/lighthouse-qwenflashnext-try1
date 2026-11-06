@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>CAPE VELLAN LIGHT - Living Cross-Section</title>
+<style>
+html,body{margin:0;height:100%;background:#04060b;overflow:hidden}
+#wrap{position:fixed;inset:0;display:flex;align-items:center;justify-content:center}
+canvas{image-rendering:pixelated;image-rendering:crisp-edges;-webkit-user-select:none;user-select:none;cursor:crosshair}
+</style>
+</head>
+<body><div id="wrap"><canvas id="c"></canvas></div>
+<script>
+"use strict";
+/* ---------- seeded prng ---------- */
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;var t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
+var params=new URLSearchParams(location.search);
+function parseT(s){if(!s)return null;var m=/^(\d{1,2}):(\d{1,2})$/.exec(String(s).trim());if(!m)return null;var h=(+m[1])%24,mn=Math.min(59,+m[2]);return h+mn/60;}
+var SEED=(params.has('seed')?(parseInt(params.get('seed'),10)>>>0):1847)>>>0;
+var rnd=mulberry32(SEED);
+var simT=parseT(params.get('t')); if(simT===null)simT=17.85;
+var paused=(params.get('paused')==='1');
+var SPEEDS=[0.25,0.5,1,2,4,8,16],spIdx=2;
+var DAYLEN=180; /* real seconds per 24 sim hours at speed 1 */
+
+/* ---------- canvas ---------- */
+var W=480,H=270,HZ=150;
+var cv=document.getElementById('c'),cx=cv.getContext('2d');
+var buf=document.createElement('canvas');buf.width=W;buf.height=H;
+var g=buf.getContext('2d');
+var scale=0;
+function resize(){var s=Math.max(1,Math.floor(Math.min(innerWidth/W,innerHeight/H)));if(s!==scale){scale=s;cv.width=W*s;cv.height=H*s;}cx.imageSmoothingEnabled=false;}
+addEventListener('resize',resize);resize();
+
+/* ---------- colour helpers ---------- */
+var B4=[[0,8,2,10],[12,4,14,6],[3,11,1,9],[15,7,13,5]];
+var colCache=new Map();
+function C(a){var r=a[0]|0,gg=a[1]|0,b=a[2]|0;var k=(r<0?0:r>255?255:r)+'-'+(gg<0?0:gg>255?255:gg)+'-'+(b<0?0:b>255?255:b);var s=colCache.get(k);if(!s){s='rgb('+k.replace(/-/g,',')+')';colCache.set(k,s);}return s;}
+function lerp3(a,b,t){t=t<0?0:t>1?1:t;return[a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t,a[2]+(b[2]-a[2])*t];}
+function mul3(a,f){return[a[0]*f,a[1]*f,a[2]*f];}
+function clamp(x,a,b){return x<a?a:x>b?b:x;}
+function smooth(a,b,x){x=clamp((x-a)/(b-a),0,1);return x*x*(3-2*x);}
+function dith(x,y,w,h,cA,cB,thr){g.fillStyle=C(cA);g.fillRect(x,y,w,h);if(thr>0&&thr<16){g.fillStyle=C(cB);for(var j=0;j<h;j++)for(var i=0;i<w;i++)if(B4[(y+j)&3][(x+i)&3]<thr)g.fillRect(x+i,y+j,1,1);}}
+
+/* ---------- 5x7 pixel font ---------- */
+var F={};
+function G(c,s){F[c]=s;}
+G('A','01110100011000111111100011000110001');G('B','11110100011000111110100011000111110');
+G('C','01110100011000010000100001000101110');G('D','11100100101000110001100011001011100');
+G('E','11111100001000011110100001000011111');G('F','11111100001000011110100001000010000');
+G('G','01110100011000010111100011000101110');G('H','10001100011000111111100011000110001');
+G('I','01110001000010000100001000010001110');G('J','00111000100001000010000101001001100');
+G('K','10001100101010011000101001001010001');G('L','10000100001000010000100001000011111');
+G('M','10001110111010110101100011000110001');G('N','10001110011010110011100011000110001');
+G('O','01110100011000110001100011000101110');G('P','11110100011000111110100001000010000');
+G('Q','01110100011000110001101011001001101');G('R','11110100011000111110101001001010001');
+G('S','01111100001000001110000010000111110');G('T','11111001000010000100001000010000100');
+G('U','10001100011000110001100011000101110');G('V','10001100011000110001100010101000100');
+G('W','10001100011000110101101011101110001');G('X','10001100010101000100010101000110001');
+G('Y','10001100010101000100001000010000100');G('Z','11111000010001000100010001000011111');
+G('0','01110100011001110101110011000101110');G('1','00100011000010000100001000010001110');
+G('2','01110100010000100010001000100011111');G('3','11111000100010000010000011000101110');
+G('4','00010001100101010010111110001000010');G('5','11111100001111000001000011000101110');
+G('6','00110010001000011110100011000101110');G('7','11111000010001000100010001000010000');
+G('8','01110100011000101110100011000101110');G('9','01110100011000101111000010001001100');
+G(' ','00000000000000000000000000000000000');G(':','00000001000000000000000100000000000');
+G('.','00000000000000000000000000010001100');G('-','00000000000000011111000000000000000');
+G('!','00100001000010000100001000000000100');G('\'','00100001000100000000000000000000000');
+G(',','00000000000000000000000000010001000');G('<','00010001000100010000010000010000010');
+G('>','01000001000001000001000010010001000');G('=','00000000001111100000111110000000000');
+G('(','00010001000100001000010000010000010');G(')','01000001000001000010000100010001000');
+G('/','00001000010001000100001000100010000');
+function txt(s,x,y,col){g.fillStyle=C(col);for(var q=0;q<s.length;q++){var gl=F[s.charAt(q)]||F[' '];for(var r=0;r<7;r++)for(var c=0;c<5;c++)if(gl.charAt(r*5+c)==='1')g.fillRect(x+q*6+c,y+r,1,1);}return x+s.length*6;}
+function txtw(s){return s.length*6-1;}
+
+/* ---------- time / sky / bodies ---------- */
+function nf(t){ /* night factor 0..1 */
+ if(t<4.2)return 1; if(t<7)return 1-smooth(4.2,7,t); if(t<16.8)return 0; if(t<19.8)return smooth(16.8,19.8,t); return 1;}
+var SKYK=[[0,[12,14,32],[26,30,56]],[4.6,[12,14,32],[26,30,56]],[5.3,[44,38,84],[168,86,64]],
+ [6.4,[92,96,150],[236,130,80]],[7.6,[78,120,196],[196,186,168]],[12,[52,112,204],[150,196,224]],
+ [16.5,[74,110,190],[214,178,132]],[18.3,[70,58,120],[238,112,66]],[19.3,[36,34,78],[126,66,88]],
+ [20.4,[12,14,32],[26,30,56]],[24,[12,14,32],[26,30,56]]];
+function skyPal(t){for(var i=0;i<SKYK.length-1;i++){if(t>=SKYK[i][0]&&t<=SKYK[i+1][0]){var f=smooth(SKYK[i][0],SKYK[i+1][0],t);
+ return[lerp3(SKYK[i][1],SKYK[i+1][1],f),lerp3(SKYK[i][2],SKYK[i+1][2],f)];}}return[SKYK[0][1],SKYK[0][2]];}
+var SKYN=144,skyCache=new Array(SKYN);
+function buildSky(k){var t=k/SKYN*24,p=skyPal(t),zen=p[0],hor=p[1];
+ var c=document.createElement('canvas');c.width=W;c.height=HZ+2;var cc=c.getContext('2d');var bands=7;
+ for(var y=0;y<=HZ+1;y++){var f=Math.pow(y/(HZ+1),1.35),step=f*bands,bi=Math.floor(step),r=step-bi;
+  var cA=lerp3(zen,hor,Math.min(1,bi/bands)),cB=lerp3(zen,hor,Math.min(1,(bi+1)/bands));
+  cc.fillStyle=C(cA);cc.fillRect(0,y,W,1);
+  if(r>0.06&&r<0.94){cc.fillStyle=C(cB);var thr=Math.round(r*16);
+   for(var x=0;x<W;x++)if(B4[y&3][x&3]<thr)cc.fillRect(x,y,1,1);}}
+ return c;}
+for(var kk=0;kk<SKYN;kk++)skyCache[kk]=buildSky(kk);
+function skyAt(t){return skyCache[Math.floor(clamp(t,0,23.999)/24*SKYN)%SKYN];}
+
+function sunPos(t){if(t<5.5||t>18.5)return null;var u=(t-5.5)/13;return{x:46+u*388,y:HZ+8-Math.sin(u*Math.PI)*(HZ-34)};}
+function moonPos(t){var u;if(t>=18)u=(t-18)/13;else if(t<5.5)u=(t+6)/13;else return null;
+ return{x:434-u*388,y:HZ+8-Math.sin(u*Math.PI)*(HZ-40)};}
+
+/* stars */
+var stars=[];for(var i=0;i<130;i++)stars.push({x:(rnd()*W)|0,y:(rnd()*(HZ-24))|0,b:0.35+rnd()*0.65});
+function drawStars(t){var n=nf(t);if(n<0.12)return;for(var i=0;i<stars.length;i++){var s=stars[i];
+ var tw=s.b*(0.55+0.45*Math.sin(t*473+i*2.7));if(tw>1.08-n){g.fillStyle=C(lerp3([120,130,170],[240,244,255],tw));g.fillRect(s.x,s.y,1,1);}}}
+
+/* wind - one value drives vane, smoke, clouds, waves. 24h-periodic. */
+var phA=rnd()*6.283,phB=rnd()*6.283;
+function wind(t){var w=0.6*Math.sin(t/24*2*Math.PI*2+phA)+0.4*Math.sin(t/24*2*Math.PI*5+phB);return clamp(w,-1,1);}
+
+/* ---------- mechanisms: pure functions of sim time ---------- */
+var RISE=[[1.8,2.05],[9.8,10.05],[17.8,18.05]];          /* winding windows (weight rises) */
+var DESC=[[2.05,9.8],[10.05,17.8],[18.05,25.8]];         /* descent runs */
+function Dpos(t){
+ for(var i=0;i<RISE.length;i++){var a=RISE[i][0],b=RISE[i][1];if(t>=a&&t<b)return 1-(t-a)/(b-a);}
+ for(var j=0;j<DESC.length;j++){var a2=DESC[j][0],b2=DESC[j][1];
+  if(t+24>=a2&&t+24<=b2){var tt=t+24;return(tt-a2)/(b2-a2);}
+  if(t>=a2&&t<=b2)return(t-a2)/(b2-a2);}
+ return 0;}
+function winding(t){for(var i=0;i<RISE.length;i++)if(t>=RISE[i][0]&&t<RISE[i][1])return true;return false;}
+function lampOn(t){return t>=18.25||t<6.0;}
+function lensRev(t){return Dpos(t)*20.8;}          /* ~20.8 turns per descent, reverses while winding */
+function weightY(t){return 140+Dpos(t)*62;}
+function lensRate(t){var e=0.004;return(lensRev(t+e)-lensRev(t-e))/(2*e*DAYLEN/24);} /* rev per real second */
+
+/* ---------- keeper ---------- */
+var SLABY=[208,182,156,130];
+var POLY=[[220,208],[242,201],[264,194],[276,184],
+          [276,182],[254,175],[232,168],[220,158],
+          [220,156],[242,149],[264,142],[276,132],
+          [276,130]];
+var PIF=[0,4,8,12];
+var LOC={bunk:{x:228,f:1},stove:{x:262,f:1},table:{x:246,f:1},oil:{x:238,f:0},
+ wind:{x:232,f:2},lamp:{x:230,f:3},watch:{x:227,f:3}};
+for(var lk in LOC)LOC[lk].y=SLABY[LOC[lk].f]-3;
+var SCH=[[0,'bunk','ASLEEP'],[1.75,'wind','WINDING THE CLOCKWORK'],[2.25,'bunk','ASLEEP'],
+ [5.5,'lamp','CLIMBS UP TO THE LANTERN'],[6.15,'table','BREAKFAST BY THE FIRE'],
+ [7.25,'stove','TENDING THE STOVE'],[8.25,'oil','CHECKING THE OIL STORE'],
+ [9.75,'wind','WINDING THE CLOCKWORK'],[10.3,'lamp','POLISHING THE LENS'],
+ [11.5,'table','A QUIET MEAL'],[12.75,'oil','TRIMMING THE OIL CANS'],
+ [14,'table','WRITING THE LOGBOOK'],[15.5,'stove','THE KETTLE IS ON'],
+ [16.75,'bunk','RESTING BEFORE THE NIGHT'],[17.7,'wind','WINDING THE CLOCKWORK'],
+ [18.25,'lamp','LIGHTING THE LAMP'],[18.75,'watch','KEEPING THE LIGHT WATCH'],
+ [20.5,'table','SUPPER AND THE LOGBOOK'],[22.25,'bunk','ASLEEP']];
+var WSPEED=380; /* px per sim hour */
+function buildPath(ak,bk){
+ if(ak===bk)return null;var A=LOC[ak],B=LOC[bk];
+ if(A.f===B.f)return[{x:A.x,y:A.y},{x:B.x,y:B.y}];
+ var iA=PIF[A.f],iB=PIF[B.f],pts=[{x:A.x,y:SLABY[A.f]-3}];
+ if(iA<iB)for(var i=iA;i<=iB;i++)pts.push({x:POLY[i][0],y:POLY[i][1]-3});
+ else for(var j=iA;j>=iB;j--)pts.push({x:POLY[j][0],y:POLY[j][1]-3});
+ pts.push({x:B.x,y:SLABY[B.f]-3});pts.push({x:B.x,y:B.y});return pts;}
+function along(p,d){var acc=0;for(var i=0;i<p.length-1;i++){var dx=p[i+1].x-p[i].x,dy=p[i+1].y-p[i].y,L=Math.sqrt(dx*dx+dy*dy);
+ if(acc+L>=d){var f=(d-acc)/L;return{x:p[i].x+dx*f,y:p[i].y+dy*f,dx:dx};}acc+=L;}
+ var n=p[p.length-1];return{x:n.x,y:n.y,dx:0};}
+function keeperState(t){
+ var ci=0;for(var i=0;i<SCH.length;i++)if(t>=SCH[i][0])ci=i;
+ var e=SCH[ci],pe=SCH[ci>0?ci-1:SCH.length-1];
+ var s=e[0],next=ci+1<SCH.length?SCH[ci+1][0]:24;
+ var el=t-s,dur=next-s;
+ var path=buildPath(pe[1],e[1]);
+ if(path){var plen=0;for(var q=0;q<path.length-1;q++){var dx=path[q+1].x-path[q].x,dy=path[q+1].y-path[q].y;plen+=Math.sqrt(dx*dx+dy*dy);}
+  var mv=Math.min(plen/WSPEED,dur*0.82);
+  if(el<mv){var pos=along(path,WSPEED*el);return{x:pos.x,y:pos.y,walk:true,dir:pos.dx>=0?1:-1,lab:e[2],f:e[1]?LOC[e[1]].f:0};}}
+ var a=LOC[e[1]],idle=Math.sin(t*21)*0.4;
+ return{x:a.x+ (e[2]==='ASLEEP'?0:idle*0),y:a.y,walk:false,dir:e[1]==='stove'?-1:1,lab:e[2],f:LOC[e[1]].f};
+}
+
+/* ---------- static scenery ---------- */
+var rockTop=new Float32Array(W);
+(function(){var jag=[];for(var i=0;i<24;i++)jag.push(rnd()*2-1);
+ for(var x=0;x<W;x++){var d=Math.abs(x-248);
+  if(d>108){rockTop[x]=H+4;continue;}
+  var base=206+Math.pow(d/108,1.5)*46;
+  var j=Math.sin(x*0.09)*3+Math.sin(x*0.37+2)*2+jag[(Math.floor(x/9))%24]*3.5;
+  rockTop[x]=base+j;
+  if(x>=150&&x<=192)rockTop[x]=199+Math.sin(x*0.4)*0.6;}})();
+var strata=[];for(var x=140;x<356;x+=3)if(rnd()<0.5)strata.push(x);
+
+var headTop=[];for(var x=0;x<130;x++)headTop[x]=HZ-Math.max(0,Math.sin(x/130*Math.PI)*13-Math.sin(x*0.7)*1.5);
+
+var clouds=[];
+for(var ci=0;ci<8;ci++){var cy=16+rnd()*72,px=[],cw=26+rnd()*34;
+ var nb=3+(rnd()*3|0);var bl=[];for(var b=0;b<nb;b++)bl.push({ox:rnd()*cw,oy:rnd()*8-4,r:4+rnd()*4});
+ for(var yy=-9;yy<=9;yy++)for(var xx=-4;xx<=cw+4;xx++){var inb=false;
+  for(var b2=0;b2<bl.length;b2++){var dx=xx-bl[b2].ox,dy=yy-bl[b2].oy;if(dx*dx+dy*dy<bl[b2].r*bl[b2].r){inb=true;break;}}
+  if(inb)px.push([xx|0,yy|0,(yy<0?0:1)]);}
+ clouds.push({y:cy,x0:rnd()*W,sp:0.5+rnd(),px:px,w:cw+8});}
+
+var mossSeed=[];for(var i=0;i<80;i++)mossSeed.push(rnd());
+
+/* ---------- frame palette ---------- */
+var COL={};
+function buildCol(t){var n=nf(t),u=1-n;
+ function mx(a,b){return lerp3(a,b,n*0.88);}
+ COL.rock=mx([104,96,84],[40,42,58]);COL.rockD=mx([78,70,60],[28,30,44]);COL.rockL=mx([128,118,102],[54,56,74]);
+ COL.stone=mx([118,110,100],[44,46,64]);COL.stoneD=mx([92,84,76],[32,34,50]);COL.cut=mx([150,140,124],[64,66,86]);
+ COL.paintA=mx([210,202,184],[72,76,98]);COL.paintB=mx([170,66,54],[72,36,46]);
+ COL.wood=mx([122,86,52],[44,38,52]);COL.woodD=mx([92,64,40],[32,28,42]);
+ COL.iron=mx([110,112,120],[44,48,64]);COL.ironL=mx([150,152,160],[66,70,88]);
+ COL.copper=mx([92,152,130],[36,64,68]);COL.copperD=mx([64,116,100],[26,48,54]);
+ COL.glass=mx([180,210,228],[72,92,122]);
+ COL.sea=[mx([96,150,190],[30,40,72]),mx([74,126,172],[23,33,62]),mx([52,97,152],[17,26,50]),mx([36,74,128],[12,19,40])];
+ COL.crest=mx([150,196,222],[64,78,112]);
+ COL.foam=mx([232,238,242],[118,130,152]);
+ COL.smoke=mx([196,196,202],[74,76,96]);
+ COL.cloud=[mx([236,238,242],[64,66,90]),mx([196,200,212],[46,48,70])];
+ COL.head=mx([74,90,112],[24,28,50]);
+ COL.warm=[255,214,140];
+ COL.amb=0.5+0.5*(1-n);
+ COL.beam=mul3([255,246,200],0.3+0.7*n);
+}
+
+/* ---------- drawing ---------- */
+function drawSea(t){var w=wind(t),aw=Math.abs(w);
+ var YS=[150,157,184,214],YE=[157,184,214,271];
+ for(var b=0;b<4;b++){g.fillStyle=C(COL.sea[b]);g.fillRect(0,YS[b],W,YE[b]-YS[b]);}
+ var amp=1+2.6*aw,ws=34+54*aw;
+ for(var i=0;i<16;i++){var yk=HZ+4+i*7.3;if(yk>H-2)break;
+  var cc=(i%2)?COL.crest:lerp3(COL.sea[i%4],COL.crest,0.5);g.fillStyle=C(cc);
+  for(var x=0;x<W;x+=2){var yy=yk+Math.round(amp*Math.sin(0.048*x+t*ws*0.16+i*2.1));g.fillRect(x,yy,2,1);}}
+ /* moon glint */
+ var m=moonPos(t);if(m&&m.y<HZ-6&&nf(t)>0.35){var mx0=Math.round(m.x);
+  for(var y=HZ+2;y<HZ+44;y+=2){var ph=Math.sin(y*0.9+t*120);if(ph>-0.4){
+   var wd=2+((y-HZ)/8|0)+(ph>0.6?2:0);g.fillStyle=C(mul3([200,214,240],0.25+0.4*nf(t)));
+   g.fillRect(mx0-wd/2|0,y,wd,1);}}}
+ /* headland */
+ for(var x=0;x<130;x++){var yt=Math.round(headTop[x]);g.fillStyle=C(COL.head);g.fillRect(x,yt,1,HZ+1-yt);}
+ g.fillStyle=C(mul3(COL.head,0.8));g.fillRect(0,HZ,W,2);
+}
+function drawRock(t){var w=wind(t);
+ for(var x=140;x<356;x++){var y0=Math.round(rockTop[x]);if(y0>H)continue;
+  var hh=y0>=199&&x>=150&&x<=192;
+  g.fillStyle=C(hh?COL.rockD:COL.rock);g.fillRect(x,y0,1,H-y0);
+  g.fillStyle=C(COL.rockL);g.fillRect(x,y0,1,1);
+  if(strata[((x-140)/3)|0]){g.fillStyle=C(COL.rockD);var yy=y0+6+((x*7)%11);if(yy<H)g.fillRect(x,yy,1,1);}
+  if(mossSeed[x%80]<0.25&&y0<214&&y0+3<H){g.fillStyle=C(mul3(COL.rockD,0.75));g.fillRect(x,y0+2,1,1);}}
+ /* foam */
+ for(var x=140;x<356;x++){var y0=rockTop[x];if(y0>H)continue;
+  var f=Math.sin(t*95+x*0.7)*0.5+0.5;
+  if(f>0.62-0.22*Math.abs(w)){g.fillStyle=C(COL.foam);var n=1+(f>0.85?1:0);
+   g.fillRect(x-1,Math.round(y0)-1,n,1);if(f>0.8)g.fillRect(x+1,Math.round(y0),1,1);}}}
+
+function drawCottage(t){var x0=158,yF=199,w=wind(t);
+ g.fillStyle=C(COL.stoneD);g.fillRect(x0,yF-14,30,14);
+ g.fillStyle=C(COL.paintB);for(var x=x0;x<x0+30;x+=4)g.fillRect(x,yF-14,2,14);
+ /* roof */
+ for(var i=0;i<9;i++)g.fillRect(x0-1+i,yF-15-i,32-2*i,1);
+ g.fillStyle=C(COL.iron);g.fillRect(x0+22,yF-22,4,8); /* chimney */
+ var n=nf(t),lit=nf(t)>0.35;
+ var wc=lit?COL.warm:mul3(COL.iron,0.8);
+ g.fillStyle=C(wc);g.fillRect(x0+4,yF-10,4,4);g.fillRect(x0+14,yF-10,4,4);
+ if(lit){g.fillStyle=C(mul3(COL.warm,0.5));g.fillRect(x0+3,yF-11,6,6);g.fillRect(x0+13,yF-11,6,6);}
+ /* smoke drifts with wind */
+ for(var i2=0;i2<5;i2++){var ph=(t*2.3+i2*0.2)%1;if(ph<0.05)continue;
+  var sx=x0+24+w*24*ph+Math.sin(ph*7+i2)*1.5,sy=yF-24-ph*22,sz=1+(ph*3|0);
+  g.fillStyle=C(mul3(COL.smoke,0.9-ph*0.5));g.fillRect(Math.round(sx),Math.round(sy),sz,sz);}}
+
+function drawClouds(t){var w=wind(t),dir=w>=0?1:-1,sp=(8+36*Math.abs(w));
+ for(var i=0;i<clouds.length;i++){var c=clouds[i];
+  var x=((c.x0+dir*t*sp*c.sp)%(W+c.w+60))-c.w-30;
+  for(var p=0;p<c.px.length;p++){var q=c.px[p];
+   g.fillStyle=C(q[2]?COL.cloud[1]:COL.cloud[0]);g.fillRect(Math.round(x+q[0]),c.y+q[1],1,1);}}}
+
+function drawBeam(t){
+ if(!lampOn(t))return;
+ var th=lensRev(t)*Math.PI*2,h=Math.cos(th),d=Math.sin(th),n=nf(t);
+ var lx=248,ly=117;
+ /* additive light: the beam adds to whatever it crosses (sky, clouds, sea, rock) */
+ var k=0.10+0.16*n;
+ var colA=mul3([255,244,190],k),colB=mul3([255,244,190],k*0.55),colC=mul3([255,244,190],k*0.28);
+ var len=40+330*Math.abs(h),dir=h>=0?1:-1;
+ g.globalCompositeOperation='lighter';
+ if(Math.abs(h)>0.06){
+  wedge(lx,ly,len*0.34,dir,colA,7);wedge(lx,ly,len*0.68,dir,colB,14);wedge(lx,ly,len,dir,colC,26);}
+ /* flash toward viewer */
+ var fl=Math.max(0,d);
+ if(fl>0.72){var s=(fl-0.72)/0.28;
+  for(var r=3;r<=18;r+=5){g.fillStyle=C(mul3([255,230,160],0.10+0.22*s));g.fillRect(lx-r,ly-r,r*2+1,r*2+1);}
+  g.fillStyle=C(mul3([255,240,190],0.5));g.fillRect(lx-2,ly-2,5,5);}
+ /* sea reflection streak */
+ if(Math.abs(h)>0.5&&n>0.25){var rx=Math.round(lx+dir*150);
+  if(rx>10&&rx<W-10)for(var y=HZ+3;y<HZ+40;y+=2){var ph=Math.sin(y*0.8+t*90);
+   if(ph>-0.2){var wd=3+((y-HZ)/10|0)+(ph>0.5?2:0);
+    g.fillStyle=C(mul3([255,224,150],0.06+0.14*n*(0.5+ph/2)));g.fillRect(rx-(wd>>1),y,wd,1);}}}
+ /* rock lighting */
+ if(Math.abs(h)>0.4){var x1=dir>0?lx+14:lx-84,x2=dir>0?lx+84:lx-14;
+  for(var x=x1;x<x2;x++){var yt=Math.round(rockTop[x]);if(yt>H)continue;
+   g.fillStyle=C(mul3([255,220,140],0.05+0.10*n));g.fillRect(x,yt,1,2);}}
+ g.globalCompositeOperation='source-over';
+}
+function wedge(x,y,len,dir,col,thick){var fy=y+2+len*0.045; /* slight downward tilt so the beam reaches the sea at distance */
+ g.fillStyle=C(col);g.beginPath();g.moveTo(x,y-2);
+ g.lineTo(x+dir*len,fy-thick/2);g.lineTo(x+dir*len,fy+2+thick/2);g.lineTo(x,y+3);g.closePath();g.fill();}
+
+/* tower shell + interiors */
+function drawTower(t){
+ var n=nf(t),on=lampOn(t),w=wind(t);
+ var bodyTop=104,bodyBot=208;
+ /* outer masonry (sides) with daymark bands, fixed shaft so the cut plane is vertical */
+ for(var y=bodyTop;y<=bodyBot;y++){
+  var band=(Math.floor((y-104)/21)%2===0)?COL.paintA:COL.paintB;
+  g.fillStyle=C(band);g.fillRect(208,y,7,1);g.fillRect(281,y,7,1);
+  g.fillStyle=C(mul3(band,0.7));if(y%3===0)g.fillRect(208,y,1,1);if(y%3===1)g.fillRect(287,y,1,1);
+  g.fillStyle=C(COL.stoneD);g.fillRect(215,y,1,1);g.fillRect(280,y,1,1);}
+ /* interior background */
+ dith(217,bodyTop,62,bodyBot-bodyTop+1,COL.stoneD,COL.stone,4);
+ /* night interior warmth when lamp lit */
+ if(on&&n>0.2){dith(217,104,62,52,mul3(COL.warm,0.14+0.2*n),COL.stoneD,6);}
+ if(n>0.4){dith(217,160,62,20,mul3([255,140,60],0.18*n),COL.stoneD,5);} /* stove glow */
+ /* floors + ceiling joists, chain hole */
+ for(var f=0;f<4;f++){var ys=SLABY[f];
+  g.fillStyle=C(COL.wood);g.fillRect(217,ys,49,3);g.fillRect(271,ys,8,3);
+  g.fillStyle=C(COL.woodD);g.fillRect(217,ys+2,49,1);g.fillRect(271,ys+2,8,1);
+  for(var xx=221;xx<268;xx+=8)g.fillRect(xx,ys+1,1,1);}
+ /* cut edges: bright stone cross-section showing wall thickness, aligned with the shaft */
+ g.fillStyle=C(COL.cut);g.fillRect(216,bodyTop,2,bodyBot-bodyTop+1);g.fillRect(279,bodyTop,2,bodyBot-bodyTop+1);
+ for(var y2=bodyTop;y2<bodyBot;y2+=4){g.fillStyle=C(mul3(COL.cut,0.72));g.fillRect(216,y2,2,1);g.fillRect(279,y2,2,1);}
+ /* spiral stair */
+ for(var i=0;i<POLY.length-1;i++){var a=POLY[i],b=POLY[i+1];
+  var L=Math.abs(b[0]-a[0])+Math.abs(b[1]-a[1]),steps=Math.max(2,Math.round(L/7));
+  for(var s2=0;s2<=steps;s2++){var q=s2/steps;var px=Math.round(a[0]+(b[0]-a[0])*q),py=Math.round(a[1]+(b[1]-a[1])*q);
+   g.fillStyle=C(COL.wood);g.fillRect(px-2,py-1,6,2);g.fillStyle=C(COL.woodD);g.fillRect(px-2,py,6,1);
+   g.fillStyle=C(COL.iron);g.fillRect(px,py-6,1,5);}}
+ rooms(t);
+ weight(t);
+ drawLens(t);
+ domeGallery(t);
+}
+function lerp3v(a,b,t){return a+(b-a)*(t<0?0:t>1?1:t);}
+
+function rooms(t){var n=nf(t),on=lampOn(t);
+ /* F0 oil store */
+ var yb=205;
+ cask(222,yb);cask(230,yb);cask(226,yb-8);
+ g.fillStyle=C(COL.iron);g.fillRect(240,yb-3,4,3);g.fillRect(246,yb-2,3,2);g.fillRect(241,yb-5,2,2);
+ g.fillStyle=C(COL.woodD);g.fillRect(262,190,14,2);g.fillRect(263,192,1,4);g.fillRect(274,192,1,4);
+ g.fillStyle=C(COL.ironL);g.fillRect(264,186,2,4);g.fillRect(268,187,2,3);g.fillRect(271,186,2,4);
+ /* F1 keeper's quarters */
+ /* bunk */
+ g.fillStyle=C(COL.woodD);g.fillRect(218,171,14,8);
+ g.fillStyle=C(COL.paintA);g.fillRect(219,172,13,5);
+ g.fillStyle=C([200,90,80]);g.fillRect(219,172,4,5);
+ g.fillStyle=C(COL.woodD);g.fillRect(218,169,2,4);
+ /* clock */
+ g.fillStyle=C(COL.wood);g.fillRect(220,160,9,11);g.fillStyle=C(COL.paintA);g.fillRect(221,161,7,7);
+ var ha=(t%12)/12*Math.PI*2,ma=(t*60%60)/60*Math.PI*2,pa=0.5*Math.sin(t/0.105*Math.PI*2);
+ g.fillStyle=C([20,20,30]);g.fillRect(224,164,1,1);
+ g.fillRect(224+Math.round(Math.sin(ha)*2),164-Math.round(Math.cos(ha)*2),1,1);
+ g.fillRect(224+Math.round(Math.sin(ma)*3),164-Math.round(Math.cos(ma)*3),1,1);
+ g.fillStyle=C(COL.ironL);g.fillRect(224+Math.round(Math.sin(pa)*3),168,1,3);
+ /* table + logbook */
+ g.fillStyle=C(COL.wood);g.fillRect(242,174,12,2);g.fillRect(243,176,1,4);g.fillRect(252,176,1,4);
+ g.fillStyle=C(COL.paintA);g.fillRect(245,172,6,2);
+ /* stove + fire */
+ g.fillStyle=C(COL.iron);g.fillRect(260,170,8,9);g.fillRect(263,160,2,10);
+ var fk=0.7+0.3*Math.sin(t*880)+0.2*Math.sin(t*1290);fk=Math.round(clamp(fk,0,1)*3)/3;
+ g.fillStyle=C(mul3([255,150,50],0.55+0.45*fk));g.fillRect(262,174,4,3);
+ if(n>0.3){dith(258,168,12,12,mul3([255,140,50],0.2*n),COL.stoneD,4);}
+ /* F2 watch room - gear train + drum */
+ var D=Dpos(t),revP=2.6*D*Math.PI*2;
+ gear(228,146,6,20,revP,COL.iron);
+ gear(237,146,6,20,revP*2,COL.ironL);gear(237,146,3,10,revP*2,COL.iron);
+ gear(246,146,3,10,revP*4,COL.iron);gear(246,146,6,20,revP*4,COL.ironL);
+ gear(255,146,3,10,revP*8,COL.iron);
+ /* lens shaft implied up through ceiling */
+ g.fillStyle=C(COL.iron);g.fillRect(254,130,2,13);
+ /* winding crank */
+ var ca=revP*2,ckx=228+Math.cos(ca)*5,cky=146+Math.sin(ca)*5;
+ g.fillStyle=C(COL.woodD);g.fillRect(228,146,1,1);g.fillRect(Math.round(ckx),Math.round(cky),2,2);
+ /* F3 lantern - glazing mullions + stand */
+ g.fillStyle=C(COL.iron);g.fillRect(217,104,62,2);
+ for(var gx=222;gx<279;gx+=10)g.fillRect(gx,106,1,22);
+ g.fillStyle=C(COL.iron);g.fillRect(217,127,62,1);
+ if(n>0.4){for(var gxp=222;gxp<279;gxp+=10)g.fillStyle=C(mul3(COL.warm,0.25*n)),g.fillRect(gxp+1,108,9,18);}
+ /* lens stand */
+ g.fillStyle=C(COL.iron);g.fillRect(246,122,4,6);
+}
+function cask(x,y){g.fillStyle=C(COL.wood);g.fillRect(x,y-7,7,7);
+ g.fillStyle=C(COL.iron);g.fillRect(x,y-6,7,1);g.fillRect(x,y-2,7,1);
+ g.fillStyle=C(COL.woodD);g.fillRect(x,y-7,1,7);}
+
+function gear(x,y,r,teeth,ang,col){g.fillStyle=C(col);g.beginPath();g.arc(x,y,r-1,0,7);g.fill();
+ for(var i=0;i<teeth;i++){var a=ang+i/teeth*Math.PI*2;g.fillRect(Math.round(x+Math.cos(a)*r)-0,Math.round(y+Math.sin(a)*r),1,1);}
+ g.fillStyle=C(mul3(col,1.35));g.fillRect(x-1,y-1,3,3);}
+
+function weight(t){var wy=weightY(t);
+ g.fillStyle=C(COL.iron);g.fillRect(268,130,1,Math.round(wy)-130);
+ for(var y=132;y<wy;y+=3)g.fillRect(268,y,1,1);
+ g.fillStyle=C(COL.ironL);g.fillRect(265,Math.round(wy),7,9);
+ g.fillStyle=C(COL.iron);g.fillRect(265,Math.round(wy)+3,7,1);g.fillRect(265,Math.round(wy)+6,7,1);}
+
+function drawLens(t){var th=lensRev(t)*Math.PI*2,on=lampOn(t),n=nf(t);
+ var lx=248,ly=117;
+ /* fresnel drum: rings + moving panel lines show rotation */
+ for(var r=7;r>=2;r--){g.fillStyle=C(mul3(COL.glass,0.5+0.5*r/7));g.fillRect(lx-r,ly-r-1,2*r+1,2*r+2);}
+ for(var i=0;i<6;i++){var a=th+i/6*Math.PI*2,cx0=Math.round(Math.cos(a)*6);
+  g.fillStyle=C(on?COL.warm:mul3(COL.iron,0.9));g.fillRect(lx+cx0,ly-8,1,17);}
+ g.fillStyle=C(on?C(mul3(COL.warm,0.9)):C(COL.iron));g.fillRect(lx-2,ly-3,5,7);
+ if(on){g.fillStyle=C(COL.warm);g.fillRect(lx-1,ly-2,3,5);}}
+
+function domeGallery(t){var w=wind(t),n=nf(t);
+ /* gallery platform + railing, projecting past the shaft */
+ g.fillStyle=C(COL.iron);g.fillRect(205,103,89,2);
+ for(var x=208;x<289;x+=6)g.fillRect(x,98,1,5);
+ g.fillRect(207,97,83,1);
+ /* dome */
+ for(var y=86;y<=104;y++){var hw=Math.round(lerp3v(5,20,(y-86)/18));
+  g.fillStyle=C((y%4===0)?COL.copperD:COL.copper);g.fillRect(248-hw,y,hw*2+1,1);}
+ g.fillStyle=C(COL.copperD);g.fillRect(247,84,3,3); /* vent ball */
+ g.fillRect(248,80,1,4);
+ /* weathervane follows the wind */
+ var vx=w>=0?1:-1,vlen=2+Math.abs(w)*5,vy=Math.sin(t*57)*1.2;
+ var x1=248+vx*vlen,y1=77+vy;
+ g.fillStyle=C(COL.iron);g.fillRect(248,78,1,1);
+ for(var s=0;s<=8;s++){var q=s/8;g.fillRect(Math.round(248+(x1-248)*q),Math.round(78+(y1-78)*q),1,1);}
+ g.fillRect(Math.round(x1),Math.round(y1),vx>0?2:1,1);
+ g.fillStyle=C(COL.ironL);g.fillRect(247,80,3,1);}
+
+/* keeper */
+function drawKeeper(t){var k=keeperState(t);
+ var n=nf(t),lit=nf(t)>0.3?(lampOn(t)&&k.f===3?1:(k.f===1?0.75:0.5))+(k.f===3&&lampOn(t)?0.4:0):1;
+ var f=clamp(0.45+0.55*(1-n)+(k.f===3&&lampOn(t)?0.35:0)+(k.f===1?0.15*(1-n):0),0.4,1);
+ var x=Math.round(k.x),y=Math.round(k.y),dir=k.dir;
+ var asleep=(k.lab==='ASLEEP'||k.lab==='RESTING BEFORE THE NIGHT')&&!k.walk;
+ if(asleep){/* lying in bunk */
+  g.fillStyle=C(mul3([70,90,130],f));g.fillRect(x-2,y-6,9,3);
+  g.fillStyle=C(mul3([210,170,120],f));g.fillRect(x+(dir>0?7:-1),y-7,2,2);
+  g.fillStyle=C(mul3([200,90,80],f));g.fillRect(x+(dir>0?-3:5),y-6,3,3);
+  var zt=(t*3)%1;g.fillStyle=C(mul3([220,220,240],0.7));txt('Z',x+8,y-13-zt*3,[220,220,240]);
+  return;}
+ var step=(k.walk?Math.floor(t*900)%2:0);
+ g.fillStyle=C(mul3([40,52,74],f));           /* legs */
+ g.fillRect(x-1,y-3+(step?1:0),1,3);g.fillRect(x+1,y-3+(step?0:1),1,3);
+ g.fillStyle=C(mul3([58,78,110],f));          /* oilskin coat */
+ g.fillRect(x-2,y-7,4,4);
+ g.fillStyle=C(mul3([212,172,122],f));        /* head */
+ g.fillRect(x-1,y-9,3,2);
+ g.fillStyle=C(mul3([26,32,50],f));           /* cap */
+ g.fillRect(x-1,y-10,3,1);g.fillRect(x+(dir>0?1:-2),y-9,1,1);
+ g.fillStyle=C(mul3([58,78,110],f));          /* arm */
+ var ap=(k.lab.indexOf('WINDING')>=0)?Math.round(Math.sin(t*400)):0;
+ g.fillRect(x+(dir>0?2:-3),y-6+ap,1,3);
+}
+
+/* ---------- overlay UI ---------- */
+function panel(x,y,w2,h2){g.fillStyle='rgba(10,14,24,0.82)';g.fillRect(x,y,w2,h2);
+ g.fillStyle='rgba(160,180,220,0.9)';g.fillRect(x,y,w2,1);g.fillRect(x,y+h2-1,w2,1);
+ g.fillRect(x,y,1,h2);g.fillRect(x+w2-1,y,1,h2);}
+function callout(num,nx,ny,lx,ly,ax,ay,sub){
+ g.fillStyle='#dfe6f5';g.fillRect(nx,ny,9,9);g.fillStyle='#10141f';g.fillRect(nx+1,ny+1,7,7);
+ txt(String(num),nx+2,ny+1,[223,230,245]);
+ txt(lx,nx+13,ny,[223,230,245]);if(sub)txt(sub,nx+13,ny+9,[150,165,195]);
+ /* leader: horizontal then to anchor */
+ var sx=nx+(num?'9':'0'),dirx=ax>nx?1:-1;
+ var x0=nx-4,y0=ny+4;
+ var px0=dirx>0?nx+txtw(lx)+14:nx-4;
+ var sx2=dirx>0?nx+13:ax;
+ line(Math.round(dirx>0?nx+txtw(lx)+14:nx-4),y0,ax,ay);
+ g.fillStyle='#dfe6f5';g.fillRect(ax-1,ay-1,3,3);}
+function line(x0,y0,x1,y1){var n2=Math.max(Math.abs(x1-x0),Math.abs(y1-y0));g.fillStyle='rgba(210,222,246,0.75)';
+ for(var i=0;i<=n2;i++){g.fillRect(Math.round(x0+(x1-x0)*i/n2),Math.round(y0+(y1-y0)*i/n2),1,1);}}
+
+function drawUI(t){
+ var n=nf(t),w=wind(t),on=lampOn(t);
+ /* title */
+ panel(4,4,208,20);
+ txt('CAPE VELLAN LIGHT - EST 1847',10,8,[235,240,252]);
+ /* callouts */
+ callout(1,6,36,'OIL STORE','casks and cans',216,196);
+ callout(2,6,68,"KEEPER'S QUARTERS",'bunk stove clock',216,170);
+ callout(3,6,100,'WATCH ROOM','clockwork and weight',216,144);
+ callout(4,W-158,62,'LANTERN ROOM','lens dome and vane',282,118);
+ callout(5,W-158,80,'SPIRAL STAIR','one stair, all floors',252,150);
+ /* status panel */
+ var hh=Math.floor(t),mm=Math.round((t%1)*60+1e-9);if(mm>=60){mm=0;hh=(hh+1)%24;}
+ var ts=(hh<10?'0':'')+hh+':'+(mm<10?'0':'')+mm;
+ var km=Math.round(Math.abs(w)*28);
+ var lrev=lensRate(t);
+ panel(W-128,4,124,52);
+ txt('TIME   '+ts,W-122,9,[235,240,252]);
+ txt('WIND   '+km+'KT '+(w>=0?'>':'<'),W-122,17,[235,240,252]);
+ txt('LAMP   '+(on?'LIT':'OUT'),W-122,25,on?[255,214,140]:[150,165,195]);
+ txt('LENS   '+(lrev>=0?'+':'')+(Math.abs(lrev)<10000?lrev.toFixed(2):'--')+' R/S',W-122,33,[235,240,252]);
+ txt((paused?'PAUSED':'X'+SPEEDS[spIdx])+'',W-122,43,n>0.4?[255,214,140]:[150,165,195]);
+ /* keeper log */
+ var k=keeperState(t);
+ panel(4,H-40,300,24);
+ txt('KEEPER: '+k.lab,10,H-36,[235,240,252]);
+ var l2=winding(t)?'THE DRIVE WEIGHT IS HOISTED UP'
+  :lampOn(t)?'THE LAMP BURNS, THE LENS FLASHES'
+  :'THE LAMP IS OUT, THE LENS RESTS';
+ txt(l2,10,H-28,[150,165,195]);
+ /* timeline scrubber */
+ var bx=40,bw=400,by=H-14,bh=10;
+ for(var i=0;i<100;i++){var th2=(i/100)*24,p=skyPal(th2)[1];
+  g.fillStyle=C(p);g.fillRect(bx+i*(bw/100),by,bw/100+1,bh);}
+ g.fillStyle='rgba(0,0,0,0.35)';g.fillRect(bx,by,bw,bh);
+ for(var i2=0;i2<100;i2++){var th3=(i2/100)*24,p2=skyPal(th3)[1];
+  g.fillStyle=C(p2);g.fillRect(bx+i2*(bw/100),by,bw/100+1,bh);}
+ g.fillStyle='rgba(160,180,220,0.9)';g.fillRect(bx-1,by-1,bw+2,1);g.fillRect(bx-1,by+bh,bw+2,1);
+ g.fillRect(bx-1,by-1,1,bh+2);g.fillRect(bx+bw,by-1,1,bh+2);
+ txt('0',bx-12,by+2,[200,210,230]);txt('12',bx+bw/2-6,by+2,[200,210,230]);txt('24',bx+bw+4,by+2,[200,210,230]);
+ /* handle */
+ var hx=Math.round(bx+clamp(t,0,23.999)/24*bw);
+ g.fillStyle='#f0f4ff';g.fillRect(hx-2,by-3,5,bh+7);g.fillStyle='#10141f';g.fillRect(hx-1,by-2,3,bh+5);
+ txt(ts,bx+bw/2-12,by-10,[235,240,252]);
+}
+
+/* ---------- main draw ---------- */
+function draw(t){buildCol(t);var w=wind(t);
+ g.drawImage(skyAt(t),0,0);
+ drawStars(t);
+ var su=sunPos(t),mo=moonPos(t);
+ if(su){g.fillStyle=C(lerp3([255,200,90],[255,240,180],smooth(6,8,t)));
+  var sr=t<7||t>17?7:6;g.fillRect(Math.round(su.x-sr),Math.round(su.y-sr),sr*2+1,sr*2+1);
+  g.fillStyle=C([255,250,220]);g.fillRect(Math.round(su.x-sr+2),Math.round(su.y-sr+2),sr*2-3,sr*2-3);}
+ if(mo){var n=nf(t);g.fillStyle=C(lerp3([120,130,160],[232,236,246],n));
+  g.fillRect(Math.round(mo.x-5),Math.round(mo.y-5),11,11);
+  g.fillStyle=C(lerp3([100,110,140],[200,206,224],n));
+  g.fillRect(Math.round(mo.x-2),Math.round(mo.y-1),2,2);g.fillRect(Math.round(mo.x+1),Math.round(mo.y+2),2,2);}
+ drawClouds(t);
+ drawSea(t);
+ drawRock(t);
+ drawCottage(t);
+ drawBeam(t);
+ drawTower(t);
+ drawKeeper(t);
+ drawUI(t);
+ cx.clearRect(0,0,cv.width,cv.height);
+ cx.drawImage(buf,0,0,W,H,0,0,W*scale,H*scale);
+}
+
+/* ---------- input ---------- */
+function evToBuf(e){var r=cv.getBoundingClientRect();
+ return{x:(e.clientX-r.left)/r.width*W,y:(e.clientY-r.top)/r.height*H};}
+var dragging=false;
+cv.addEventListener('mousedown',function(e){var p=evToBuf(e);
+ if(p.y>=H-20){dragging=true;simT=clamp((p.x-40)/400,0,23.999)*24;}});
+addEventListener('mousemove',function(e){if(dragging){var p=evToBuf(e);simT=clamp((p.x-40)/400,0,23.999)*24;}});
+addEventListener('mouseup',function(){dragging=false;});
+cv.addEventListener('touchstart',function(e){var p=evToBuf(e.touches[0]);
+ if(p.y>=H-20){simT=clamp((p.x-40)/400,0,23.999)*24;e.preventDefault();}},{passive:false});
+cv.addEventListener('touchmove',function(e){var p=evToBuf(e.touches[0]);
+ simT=clamp((p.x-40)/400,0,23.999)*24;e.preventDefault();},{passive:false});
+addEventListener('keydown',function(e){
+ if(e.code==='Space'){paused=!paused;e.preventDefault();}
+ else if(e.code==='ArrowRight'){spIdx=Math.min(SPEEDS.length-1,spIdx+1);e.preventDefault();}
+ else if(e.code==='ArrowLeft'){spIdx=Math.max(0,spIdx-1);e.preventDefault();}});
+
+/* ---------- loop ---------- */
+var last=performance.now();
+function frame(now){var dt=Math.min(0.1,(now-last)/1000);last=now;
+ if(!paused&&dragging===false)simT=(simT+dt*(24/DAYLEN)*SPEEDS[spIdx])%24;
+ draw(simT);
+ requestAnimationFrame(frame);}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
